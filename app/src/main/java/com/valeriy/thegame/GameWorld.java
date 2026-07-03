@@ -46,6 +46,11 @@ class GameWorld {
     private static final float ENEMY_HELP_STATION_X = WORLD_W - 980f;
     private static final float ENEMY_HELP_STATION_Y = WORLD_H - 980f;
     private static final float[] ASSAULT_LANES = {1120f, 3115f, 4970f};
+    private static final float BASE_PRESSURE_DPS_CAP = 28f;
+    private static final float MEGA_ATTACK_FIRST_DELAY = 58f;
+    private static final float MEGA_ATTACK_INTERVAL = 118f;
+    private static final float MEGA_ATTACK_DURATION = 38f;
+    private static final float MEGA_ATTACK_BANNER_SECONDS = 4.2f;
     private static final int WALL = 1;
     private static final int BARREL = 2;
     private static final int FENCE = 3;
@@ -64,6 +69,7 @@ class GameWorld {
     private static final float ROAD_TILE = 190f;
     private static final float TREE_FALL_SECONDS = 0.75f;
     private static final float TREE_REMOVE_SECONDS = 3.0f;
+    private static final float MINIMAP_SIZE = 146f;
 
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Paint bitmapPaint = new Paint();
@@ -102,6 +108,7 @@ class GameWorld {
     private final List<Obstacle> obstacles = new ArrayList<>();
     private final List<RectF> roads = new ArrayList<>();
     private final List<Scar> scars = new ArrayList<>();
+    private final List<RoadMark> roadMarks = new ArrayList<>();
     private final List<Tank> tanks = new ArrayList<>();
     private final List<Bullet> bullets = new ArrayList<>();
     private final List<Base> bases = new ArrayList<>();
@@ -123,6 +130,10 @@ class GameWorld {
     private float enemyHelpY;
     private float enemyHelpCooldown;
     private float enemyHelpSafeTimer;
+    private int megaAttackTeam;
+    private float megaAttackTimer;
+    private float megaAttackCooldown;
+    private float megaBannerTimer;
 
     GameWorld(Context context) {
         paint.setFilterBitmap(false);
@@ -169,11 +180,16 @@ class GameWorld {
     synchronized void reset(boolean authoritative, int localPlayerId, boolean multiplayer) {
         this.authoritative = authoritative;
         this.localPlayerId = localPlayerId;
+        aiClock = 0f;
         playerOneHelpActive = false;
         playerTwoHelpActive = false;
         enemyHelpActive = false;
         enemyHelpCooldown = 0f;
         enemyHelpSafeTimer = 0f;
+        megaAttackTeam = 0;
+        megaAttackTimer = 0f;
+        megaAttackCooldown = MEGA_ATTACK_FIRST_DELAY;
+        megaBannerTimer = 0f;
         tanks.clear();
         bullets.clear();
         bases.clear();
@@ -243,6 +259,7 @@ class GameWorld {
     synchronized void update(float dt) {
         if (!authoritative) return;
         aiClock += dt;
+        updateMegaAttack(dt);
         handleHelpRequests();
         updateEnemyHelp(dt);
         updateRespawns(dt);
@@ -286,6 +303,7 @@ class GameWorld {
         drawTerrain(canvas, camX, camY, width, height);
         drawRoads(canvas, camX, camY, width, height);
         drawScars(canvas, camX, camY, width, height);
+        drawRoadMarks(canvas, camX, camY, width, height);
         drawHelpStation(canvas, HELP_STATION_X, HELP_STATION_Y, "HELP STATION", playerOneHelpActive || playerTwoHelpActive, true);
         drawHelpStation(canvas, ENEMY_HELP_STATION_X, ENEMY_HELP_STATION_Y, "ENEMY RESERVE", enemyHelpActive, false);
         drawWorldBounds(canvas);
@@ -357,6 +375,8 @@ class GameWorld {
         for (Base base : bases) {
             out.append(String.format(Locale.US, "BA,%d,%d;", base.team, base.hp));
         }
+        out.append("|");
+        out.append(String.format(Locale.US, "M,%d,%.2f,%.2f;", megaAttackTeam, megaAttackTimer, megaBannerTimer));
         return out.toString();
     }
 
@@ -399,6 +419,7 @@ class GameWorld {
         }
         if (parts.length > 3) applyObstacleSnapshot(parts[3]);
         if (parts.length > 4) applyBaseSnapshot(parts[4]);
+        if (parts.length > 5) applyMegaSnapshot(parts[5]);
     }
 
     private void updateTank(Tank tank, InputState input, float dt, float speed) {
@@ -448,9 +469,19 @@ class GameWorld {
         Base enemyBase = getBase(bot.team == TEAM_ALLY ? TEAM_ENEMY : TEAM_ALLY);
         Tank closeThreat = nearestEnemy(bot, bot.role == ROLE_ATTACK ? 860f : 1040f);
         Tank baseIntruder = nearestEnemyNearBase(bot, homeBase, 1180f);
+        boolean megaAttack = megaAttackActiveFor(bot.team);
+        boolean megaDefense = megaAttackActiveAgainst(bot.team);
 
         if (bot.hp < 52 && homeBase != null && !homeBase.destroyed()) {
             return retreatToRepair(bot, homeBase, closeThreat, time);
+        }
+
+        if (megaDefense && homeBase != null && !homeBase.destroyed()
+                && (bot.role == ROLE_DEFEND || bot.role == ROLE_PATROL || bot.id % 2 == 0)) {
+            if (baseIntruder != null) return attackTank(bot, baseIntruder, time, 1040f);
+            Tank threat = nearestEnemyNearPoint(homeBase.x, homeBase.y, bot.team, 1600f);
+            if (threat != null) return attackTank(bot, threat, time, 990f);
+            return guardBase(bot, homeBase, time);
         }
 
         boolean baseAlarm = homeBase != null && !homeBase.destroyed()
@@ -469,6 +500,10 @@ class GameWorld {
         if (bot.role == ROLE_DEFEND) {
             if (baseIntruder != null) return attackTank(bot, baseIntruder, time, 980f);
             return guardBase(bot, homeBase, time);
+        }
+
+        if (megaAttack && enemyBase != null && !enemyBase.destroyed()) {
+            return attackObjective(bot, enemyBase, time);
         }
 
         if (bot.role == ROLE_SUPPORT) {
@@ -1016,6 +1051,51 @@ class GameWorld {
         return phase < WAVE_ATTACK_SECONDS;
     }
 
+    private void updateMegaAttack(float dt) {
+        Base ally = getBase(TEAM_ALLY);
+        Base enemy = getBase(TEAM_ENEMY);
+        if (ally == null || enemy == null || ally.destroyed() || enemy.destroyed()) {
+            megaAttackTeam = 0;
+            megaAttackTimer = 0f;
+            megaBannerTimer = 0f;
+            return;
+        }
+
+        if (megaAttackTimer > 0f) {
+            megaAttackTimer -= dt;
+            megaBannerTimer = Math.max(0f, megaBannerTimer - dt);
+            if (megaAttackTimer <= 0f) {
+                megaAttackTeam = 0;
+                megaAttackTimer = 0f;
+                megaAttackCooldown = MEGA_ATTACK_INTERVAL;
+            }
+            return;
+        }
+
+        megaAttackCooldown -= dt;
+        if (megaAttackCooldown > 0f) return;
+
+        int chosenTeam = random.nextBoolean() ? TEAM_ALLY : TEAM_ENEMY;
+        if (ally.hp < BASE_MAX_HP * 0.42f && enemy.hp > ally.hp) {
+            chosenTeam = TEAM_ALLY;
+        } else if (enemy.hp < BASE_MAX_HP * 0.42f && ally.hp > enemy.hp) {
+            chosenTeam = TEAM_ENEMY;
+        }
+
+        megaAttackTeam = chosenTeam;
+        megaAttackTimer = MEGA_ATTACK_DURATION;
+        megaBannerTimer = MEGA_ATTACK_BANNER_SECONDS;
+        megaAttackCooldown = MEGA_ATTACK_INTERVAL;
+    }
+
+    private boolean megaAttackActiveFor(int team) {
+        return megaAttackTeam == team && megaAttackTimer > 0f;
+    }
+
+    private boolean megaAttackActiveAgainst(int team) {
+        return megaAttackTeam != 0 && megaAttackTeam != team && megaAttackTimer > 0f;
+    }
+
     private static float teamDir(int team) {
         return team == TEAM_ALLY ? 1f : -1f;
     }
@@ -1072,6 +1152,7 @@ class GameWorld {
     private void updateBasePressure(float dt) {
         for (Base base : bases) {
             if (base.destroyed()) continue;
+            float pressureDps = 0f;
             for (Tank tank : tanks) {
                 if (tank.hp <= 0 || tank.team == base.team) continue;
                 float dist = distance(tank.x, tank.y, base.x, base.y);
@@ -1079,7 +1160,10 @@ class GameWorld {
                 if (dist > 680f && !clearShot(tank.x, tank.y, base.x, base.y)) continue;
                 float dps = dist < 620f ? 8.5f : 5.0f;
                 if (tank.reserveHelper) dps += 1.5f;
-                applyBaseDamage(base, dps * dt);
+                pressureDps += dps;
+            }
+            if (pressureDps > 0f) {
+                applyBaseDamage(base, Math.min(pressureDps, BASE_PRESSURE_DPS_CAP) * dt);
             }
         }
     }
@@ -1289,6 +1373,20 @@ class GameWorld {
         }
     }
 
+    private void applyMegaSnapshot(String snapshot) {
+        for (String item : snapshot.split(";")) {
+            if (item.length() < 2) continue;
+            String[] p = item.split(",");
+            if (p.length < 4 || !"M".equals(p[0])) continue;
+            try {
+                megaAttackTeam = Integer.parseInt(p[1]);
+                megaAttackTimer = Float.parseFloat(p[2]);
+                megaBannerTimer = Float.parseFloat(p[3]);
+            } catch (NumberFormatException ignored) {
+            }
+        }
+    }
+
     private boolean hitsObstacle(float x, float y, float r) {
         for (Obstacle obstacle : obstacles) {
             if (obstacle.gone) continue;
@@ -1331,8 +1429,10 @@ class GameWorld {
         obstacles.clear();
         roads.clear();
         scars.clear();
+        roadMarks.clear();
         buildRoads();
         buildScars();
+        buildRoadMarks();
         Random map = new Random(421);
         buildDefensiveBarriers(map);
         buildForestClusters(map);
@@ -1581,6 +1681,40 @@ class GameWorld {
         }
     }
 
+    private void buildRoadMarks() {
+        Random map = new Random(944);
+        for (RectF road : roads) {
+            boolean horizontal = road.width() >= road.height();
+            float area = road.width() * road.height();
+            int count = Math.max(5, (int) (area / 52000f));
+            for (int i = 0; i < count; i++) {
+                float x = road.left + 24f + map.nextFloat() * Math.max(1f, road.width() - 48f);
+                float y = road.top + 24f + map.nextFloat() * Math.max(1f, road.height() - 48f);
+                int roll = map.nextInt(100);
+                int kind = roll < 42 ? RoadMark.TRACKS : (roll < 72 ? RoadMark.CRACK : RoadMark.DIRT);
+                float angle = horizontal ? (map.nextFloat() * 12f - 6f) : 90f + (map.nextFloat() * 12f - 6f);
+                float w;
+                float h;
+                int color;
+                if (kind == RoadMark.TRACKS) {
+                    w = 145f + map.nextInt(150);
+                    h = 42f + map.nextInt(16);
+                    color = 0x55342720;
+                } else if (kind == RoadMark.CRACK) {
+                    w = 70f + map.nextInt(90);
+                    h = 22f + map.nextInt(18);
+                    color = 0x88302620;
+                } else {
+                    w = 90f + map.nextInt(150);
+                    h = 46f + map.nextInt(74);
+                    angle = map.nextFloat() * 180f;
+                    color = map.nextBoolean() ? 0x4f46351f : 0x454f442c;
+                }
+                roadMarks.add(new RoadMark(kind, x, y, w, h, angle, color));
+            }
+        }
+    }
+
     private boolean touchesRoad(RectF rect, float padding) {
         RectF padded = new RectF(rect.left - padding, rect.top - padding, rect.right + padding, rect.bottom + padding);
         for (RectF road : roads) {
@@ -1744,12 +1878,28 @@ class GameWorld {
                     if (RectF.intersects(visible, drawRect)) {
                         bitmapPaint.setAlpha(255);
                         canvas.drawBitmap(roadTexture, null, drawRect, bitmapPaint);
-                        paint.setColor(0x2632251a);
+                        int shade = roadTileShade(x, y);
+                        if (shade != 0) {
+                            paint.setColor(shade);
+                            canvas.drawRect(drawRect, paint);
+                        }
+                        paint.setColor(0x2032251a);
                         canvas.drawRect(drawRect, paint);
                     }
                 }
             }
         }
+    }
+
+    private int roadTileShade(float x, float y) {
+        int hx = (int) (x / ROAD_TILE);
+        int hy = (int) (y / ROAD_TILE);
+        int hash = Math.abs(hx * 73856093 ^ hy * 19349663);
+        int alpha = 16 + hash % 22;
+        int tone = hash % 3;
+        if (tone == 0) return (alpha << 24) | 0x2c261c;
+        if (tone == 1) return (alpha << 24) | 0x554b3a;
+        return (alpha << 24) | 0x1d2520;
     }
 
     private void drawScars(Canvas canvas, float camX, float camY, int width, int height) {
@@ -1762,6 +1912,43 @@ class GameWorld {
             canvas.save();
             canvas.rotate(scar.angle, scar.x, scar.y);
             canvas.drawOval(tempRect, paint);
+            canvas.restore();
+        }
+    }
+
+    private void drawRoadMarks(Canvas canvas, float camX, float camY, int width, int height) {
+        RectF visible = new RectF(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
+        for (RoadMark mark : roadMarks) {
+            tempRect.set(mark.x - mark.w * 0.5f, mark.y - mark.h * 0.5f, mark.x + mark.w * 0.5f, mark.y + mark.h * 0.5f);
+            if (!RectF.intersects(visible, tempRect)) continue;
+            canvas.save();
+            canvas.rotate(mark.angle, mark.x, mark.y);
+            paint.setColor(mark.color);
+            if (mark.kind == RoadMark.TRACKS) {
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(8f);
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                float gap = mark.h * 0.36f;
+                canvas.drawLine(mark.x - mark.w * 0.5f, mark.y - gap, mark.x + mark.w * 0.5f, mark.y - gap, paint);
+                canvas.drawLine(mark.x - mark.w * 0.5f, mark.y + gap, mark.x + mark.w * 0.5f, mark.y + gap, paint);
+                paint.setStrokeCap(Paint.Cap.BUTT);
+                paint.setStyle(Paint.Style.FILL);
+            } else if (mark.kind == RoadMark.CRACK) {
+                paint.setStyle(Paint.Style.STROKE);
+                paint.setStrokeWidth(4f);
+                paint.setStrokeCap(Paint.Cap.ROUND);
+                float left = mark.x - mark.w * 0.5f;
+                float q1 = mark.x - mark.w * 0.16f;
+                float q2 = mark.x + mark.w * 0.18f;
+                float right = mark.x + mark.w * 0.5f;
+                canvas.drawLine(left, mark.y, q1, mark.y - mark.h * 0.35f, paint);
+                canvas.drawLine(q1, mark.y - mark.h * 0.35f, q2, mark.y + mark.h * 0.28f, paint);
+                canvas.drawLine(q2, mark.y + mark.h * 0.28f, right, mark.y - mark.h * 0.12f, paint);
+                paint.setStrokeCap(Paint.Cap.BUTT);
+                paint.setStyle(Paint.Style.FILL);
+            } else {
+                canvas.drawOval(tempRect, paint);
+            }
             canvas.restore();
         }
     }
@@ -1796,16 +1983,9 @@ class GameWorld {
     }
 
     private void drawHud(Canvas canvas, int width, int height, float x, float y) {
-        paint.setColor(0xdd000000);
-        canvas.drawRoundRect(width - 178f, height - 178f, width - 22f, height - 22f, 10f, 10f, paint);
-        paint.setColor(0xff90be6d);
-        float sx = (width - 166f) + (x / WORLD_W) * 132f;
-        float sy = (height - 166f) + (y / WORLD_H) * 132f;
-        canvas.drawCircle(sx, sy, 5f, paint);
         Base allyBase = getBase(TEAM_ALLY);
         Base enemyBase = getBase(TEAM_ENEMY);
-        drawBaseMinimapMarker(canvas, width, height, allyBase, 0xff60a5fa);
-        drawBaseMinimapMarker(canvas, width, height, enemyBase, 0xffef4444);
+        drawMinimap(canvas, width, height, x, y, allyBase, enemyBase);
         paint.setTextSize(24f);
         paint.setColor(Color.WHITE);
         Base ally = allyBase;
@@ -1817,19 +1997,26 @@ class GameWorld {
         paint.setColor(0xffdbeafe);
         canvas.drawText(battleStatus(), 18f, height - 48f, paint);
         Tank local = getTank(localPlayerId);
-        if (local != null && local.hp <= 0 && local.respawnTimer > 0f) {
-            drawCenterMessage(canvas, width, height, "RESPAWN " + Math.max(1, (int) Math.ceil(local.respawnTimer)));
-        }
         if (enemy != null && enemy.destroyed()) {
             drawCenterMessage(canvas, width, height, "VICTORY");
         } else if (ally != null && ally.destroyed()) {
             drawCenterMessage(canvas, width, height, "BASE LOST");
+        } else if (local != null && local.hp <= 0 && local.respawnTimer > 0f) {
+            drawCenterMessage(canvas, width, height, "RESPAWN " + Math.max(1, (int) Math.ceil(local.respawnTimer)));
+        } else if (megaBannerTimer > 0f && megaAttackTeam != 0) {
+            drawCenterMessage(canvas, width, height, megaAttackTeam == TEAM_ALLY ? "ALLY MEGA ATTACK" : "ENEMY MEGA ATTACK");
         }
     }
 
     private String battleStatus() {
         Base ally = getBase(TEAM_ALLY);
         Base enemy = getBase(TEAM_ENEMY);
+        if (megaAttackTeam == TEAM_ALLY && megaAttackTimer > 0f) {
+            return "ALLY MEGA ATTACK";
+        }
+        if (megaAttackTeam == TEAM_ENEMY && megaAttackTimer > 0f) {
+            return "DEFEND: ENEMY MEGA ATTACK";
+        }
         if (ally != null && !ally.destroyed() && nearestEnemyNearPoint(ally.x, ally.y, TEAM_ALLY, 930f) != null) {
             return "DEFEND BASE";
         }
@@ -1839,19 +2026,85 @@ class GameWorld {
         return waveAttacking(TEAM_ENEMY, aiClock) ? "ENEMY WAVE" : "REGROUP";
     }
 
-    private void drawBaseMinimapMarker(Canvas canvas, int width, int height, Base base, int color) {
+    private void drawMinimap(Canvas canvas, int width, int height, float x, float y, Base allyBase, Base enemyBase) {
+        float pad = 18f;
+        float mapLeft = width - MINIMAP_SIZE - pad;
+        float mapTop = height - MINIMAP_SIZE - pad;
+        float mapRight = width - pad;
+        float mapBottom = height - pad;
+        tempRect.set(mapLeft - 5f, mapTop - 5f, mapRight + 5f, mapBottom + 5f);
+        paint.setStyle(Paint.Style.FILL);
+        paint.setColor(0xff15191e);
+        canvas.drawRoundRect(tempRect, 8f, 8f, paint);
+        paint.setColor(0xff56616e);
+        canvas.drawRoundRect(mapLeft - 2f, mapTop - 2f, mapRight + 2f, mapBottom + 2f, 7f, 7f, paint);
+        tempRect.set(mapLeft, mapTop, mapRight, mapBottom);
+        paint.setColor(0xb4141b22);
+        canvas.drawRoundRect(tempRect, 5f, 5f, paint);
+        paint.setColor(0x332f3a46);
+        canvas.drawLine(mapLeft + 8f, mapTop + 8f, mapRight - 8f, mapTop + 8f, paint);
+
+        for (RectF road : roads) {
+            float l = mapLeft + (road.left / WORLD_W) * MINIMAP_SIZE;
+            float t = mapTop + (road.top / WORLD_H) * MINIMAP_SIZE;
+            float r = mapLeft + (road.right / WORLD_W) * MINIMAP_SIZE;
+            float b = mapTop + (road.bottom / WORLD_H) * MINIMAP_SIZE;
+            paint.setColor(0x665e5548);
+            canvas.drawRect(l, t, r, b, paint);
+        }
+
+        for (Tank tank : tanks) {
+            if (tank.hp <= 0) continue;
+            float sx = mapLeft + (tank.x / WORLD_W) * MINIMAP_SIZE;
+            float sy = mapTop + (tank.y / WORLD_H) * MINIMAP_SIZE;
+            if (tank.team == TEAM_ENEMY) {
+                paint.setColor(0xffef4444);
+                canvas.drawCircle(sx, sy, 3.8f, paint);
+            } else if (tank.id == localPlayerId) {
+                paint.setColor(0xffffffff);
+                canvas.drawCircle(sx, sy, 3.4f, paint);
+            } else {
+                paint.setColor(0xcc38bdf8);
+                canvas.drawCircle(sx, sy, 2.5f, paint);
+            }
+        }
+
+        paint.setColor(0xff90be6d);
+        float sx = mapLeft + (x / WORLD_W) * MINIMAP_SIZE;
+        float sy = mapTop + (y / WORLD_H) * MINIMAP_SIZE;
+        canvas.drawCircle(sx, sy, 5.3f, paint);
+        drawBaseMinimapMarker(canvas, mapLeft, mapTop, allyBase, 0xff60a5fa);
+        drawBaseMinimapMarker(canvas, mapLeft, mapTop, enemyBase, 0xffef4444);
+
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeWidth(2f);
+        paint.setColor(0xff9aa4b2);
+        canvas.drawRoundRect(mapLeft - 2f, mapTop - 2f, mapRight + 2f, mapBottom + 2f, 7f, 7f, paint);
+        paint.setColor(0x99828a94);
+        canvas.drawRoundRect(mapLeft - 5f, mapTop - 5f, mapRight + 5f, mapBottom + 5f, 8f, 8f, paint);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawBaseMinimapMarker(Canvas canvas, float mapLeft, float mapTop, Base base, int color) {
         if (base == null || base.destroyed()) return;
-        float sx = (width - 166f) + (base.x / WORLD_W) * 132f;
-        float sy = (height - 166f) + (base.y / WORLD_H) * 132f;
+        float sx = mapLeft + (base.x / WORLD_W) * MINIMAP_SIZE;
+        float sy = mapTop + (base.y / WORLD_H) * MINIMAP_SIZE;
         paint.setColor(color);
-        canvas.drawRect(sx - 4f, sy - 4f, sx + 4f, sy + 4f, paint);
+        canvas.drawRect(sx - 4.8f, sy - 4.8f, sx + 4.8f, sy + 4.8f, paint);
     }
 
     private void drawCenterMessage(Canvas canvas, int width, int height, String text) {
         paint.setTextAlign(Paint.Align.CENTER);
-        paint.setTextSize(64f);
+        float maxTextWidth = width * 0.86f;
+        float textSize = text.length() > 12 ? 42f : 64f;
+        paint.setTextSize(textSize);
+        while (paint.measureText(text) > maxTextWidth && textSize > 24f) {
+            textSize -= 2f;
+            paint.setTextSize(textSize);
+        }
         paint.setColor(0xdd000000);
-        canvas.drawRoundRect(width * 0.5f - 180f, height * 0.5f - 70f, width * 0.5f + 180f, height * 0.5f + 28f, 12f, 12f, paint);
+        float boxHalf = Math.min(width * 0.46f, Math.max(180f, paint.measureText(text) * 0.5f + 28f));
+        canvas.drawRoundRect(width * 0.5f - boxHalf, height * 0.5f - 70f, width * 0.5f + boxHalf, height * 0.5f + 28f, 12f, 12f, paint);
         paint.setColor(0xffffffff);
         canvas.drawText(text, width * 0.5f, height * 0.5f, paint);
         paint.setTextAlign(Paint.Align.LEFT);
@@ -2114,6 +2367,30 @@ class GameWorld {
         final int color;
 
         Scar(float x, float y, float w, float h, float angle, int color) {
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+            this.angle = angle;
+            this.color = color;
+        }
+    }
+
+    private static class RoadMark {
+        static final int TRACKS = 1;
+        static final int CRACK = 2;
+        static final int DIRT = 3;
+
+        final int kind;
+        final float x;
+        final float y;
+        final float w;
+        final float h;
+        final float angle;
+        final int color;
+
+        RoadMark(int kind, float x, float y, float w, float h, float angle, int color) {
+            this.kind = kind;
             this.x = x;
             this.y = y;
             this.w = w;
