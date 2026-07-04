@@ -25,6 +25,7 @@ class GameWorld {
     private static final int TANK_MAX_HP = 180;
     private static final int BULLET_DAMAGE = 30;
     private static final int BASE_BULLET_DAMAGE = 46;
+    private static final int MEGA_BASE_BULLET_DAMAGE = 64;
     private static final int BASE_MAX_HP = 1200;
     private static final int ROLE_ATTACK = 1;
     private static final int ROLE_DEFEND = 2;
@@ -47,9 +48,11 @@ class GameWorld {
     private static final float ENEMY_HELP_STATION_Y = WORLD_H - 980f;
     private static final float[] ASSAULT_LANES = {1120f, 3115f, 4970f};
     private static final float BASE_PRESSURE_DPS_CAP = 28f;
+    private static final float MEGA_BASE_PRESSURE_DPS_CAP = 62f;
+    private static final float MEGA_BASE_PRESSURE_MULTIPLIER = 1.65f;
     private static final float MEGA_ATTACK_FIRST_DELAY = 58f;
     private static final float MEGA_ATTACK_INTERVAL = 118f;
-    private static final float MEGA_ATTACK_DURATION = 38f;
+    private static final float MEGA_ATTACK_DURATION = 44f;
     private static final float MEGA_ATTACK_BANNER_SECONDS = 4.2f;
     private static final int WALL = 1;
     private static final int BARREL = 2;
@@ -108,6 +111,7 @@ class GameWorld {
     private final List<Obstacle> obstacles = new ArrayList<>();
     private final List<RectF> roads = new ArrayList<>();
     private final List<Scar> scars = new ArrayList<>();
+    private final List<Crack> cracks = new ArrayList<>();
     private final List<RoadMark> roadMarks = new ArrayList<>();
     private final List<Tank> tanks = new ArrayList<>();
     private final List<Bullet> bullets = new ArrayList<>();
@@ -303,6 +307,7 @@ class GameWorld {
         drawTerrain(canvas, camX, camY, width, height);
         drawRoads(canvas, camX, camY, width, height);
         drawScars(canvas, camX, camY, width, height);
+        drawCracks(canvas, camX, camY, width, height);
         drawRoadMarks(canvas, camX, camY, width, height);
         drawHelpStation(canvas, HELP_STATION_X, HELP_STATION_Y, "HELP STATION", playerOneHelpActive || playerTwoHelpActive, true);
         drawHelpStation(canvas, ENEMY_HELP_STATION_X, ENEMY_HELP_STATION_Y, "ENEMY RESERVE", enemyHelpActive, false);
@@ -503,7 +508,7 @@ class GameWorld {
         }
 
         if (megaAttack && enemyBase != null && !enemyBase.destroyed()) {
-            return attackObjective(bot, enemyBase, time);
+            return attackObjective(bot, enemyBase, time, true);
         }
 
         if (bot.role == ROLE_SUPPORT) {
@@ -569,11 +574,15 @@ class GameWorld {
     }
 
     private InputState attackObjective(Tank bot, Base targetBase, float time) {
-        Tank blocker = nearestEnemy(bot, bot.team == TEAM_ALLY ? 760f : 820f);
-        if (blocker != null && shouldFightOnRoute(bot, blocker, targetBase)) {
+        return attackObjective(bot, targetBase, time, false);
+    }
+
+    private InputState attackObjective(Tank bot, Base targetBase, float time, boolean urgent) {
+        Tank blocker = nearestEnemy(bot, urgent ? 560f : (bot.team == TEAM_ALLY ? 760f : 820f));
+        if (blocker != null && shouldFightOnRoute(bot, blocker, targetBase, urgent)) {
             return attackTank(bot, blocker, time, 920f);
         }
-        if (distanceToBase(bot, targetBase) < 1320f) {
+        if (distanceToBase(bot, targetBase) < (urgent ? 1540f : 1320f)) {
             return attackBase(bot, targetBase, time);
         }
 
@@ -615,10 +624,14 @@ class GameWorld {
     }
 
     private boolean shouldFightOnRoute(Tank bot, Tank target, Base targetBase) {
+        return shouldFightOnRoute(bot, target, targetBase, false);
+    }
+
+    private boolean shouldFightOnRoute(Tank bot, Tank target, Base targetBase, boolean urgent) {
         float dist = distance(bot.x, bot.y, target.x, target.y);
-        if (dist < 430f) return true;
-        if (clearShot(bot.x, bot.y, target.x, target.y) && dist < 720f) return true;
-        return distance(target.x, target.y, targetBase.x, targetBase.y) < 980f;
+        if (dist < (urgent ? 360f : 430f)) return true;
+        if (clearShot(bot.x, bot.y, target.x, target.y) && dist < (urgent ? 500f : 720f)) return true;
+        return !urgent && distance(target.x, target.y, targetBase.x, targetBase.y) < 980f;
     }
 
     private float assaultLane(Tank bot) {
@@ -1153,17 +1166,26 @@ class GameWorld {
         for (Base base : bases) {
             if (base.destroyed()) continue;
             float pressureDps = 0f;
+            boolean megaPressure = false;
             for (Tank tank : tanks) {
                 if (tank.hp <= 0 || tank.team == base.team) continue;
                 float dist = distance(tank.x, tank.y, base.x, base.y);
-                if (dist > 1080f) continue;
-                if (dist > 680f && !clearShot(tank.x, tank.y, base.x, base.y)) continue;
+                boolean tankMega = megaAttackActiveFor(tank.team);
+                float pressureRange = tankMega ? 1320f : 1080f;
+                float clearShotRange = tankMega ? 860f : 680f;
+                if (dist > pressureRange) continue;
+                if (dist > clearShotRange && !clearShot(tank.x, tank.y, base.x, base.y)) continue;
                 float dps = dist < 620f ? 8.5f : 5.0f;
+                if (tankMega) {
+                    dps *= MEGA_BASE_PRESSURE_MULTIPLIER;
+                    megaPressure = true;
+                }
                 if (tank.reserveHelper) dps += 1.5f;
                 pressureDps += dps;
             }
             if (pressureDps > 0f) {
-                applyBaseDamage(base, Math.min(pressureDps, BASE_PRESSURE_DPS_CAP) * dt);
+                float cap = megaPressure ? MEGA_BASE_PRESSURE_DPS_CAP : BASE_PRESSURE_DPS_CAP;
+                applyBaseDamage(base, Math.min(pressureDps, cap) * dt);
             }
         }
     }
@@ -1185,7 +1207,7 @@ class GameWorld {
         for (Base base : bases) {
             if (base.destroyed() || base.team == bullet.team) continue;
             if (base.hitRect.contains(bullet.x, bullet.y)) {
-                applyBaseDamage(base, BASE_BULLET_DAMAGE);
+                applyBaseDamage(base, megaAttackActiveFor(bullet.team) ? MEGA_BASE_BULLET_DAMAGE : BASE_BULLET_DAMAGE);
                 return true;
             }
         }
@@ -1429,9 +1451,11 @@ class GameWorld {
         obstacles.clear();
         roads.clear();
         scars.clear();
+        cracks.clear();
         roadMarks.clear();
         buildRoads();
         buildScars();
+        buildCracks();
         buildRoadMarks();
         Random map = new Random(421);
         buildDefensiveBarriers(map);
@@ -1662,22 +1686,44 @@ class GameWorld {
     private void buildScars() {
         Random map = new Random(9044);
         for (RectF road : roads) {
-            int count = Math.max(2, (int) ((road.width() + road.height()) / 1800f));
+            int count = Math.max(4, (int) ((road.width() + road.height()) / 1150f));
             for (int i = 0; i < count; i++) {
                 float x = road.left + map.nextFloat() * road.width();
                 float y = road.top + map.nextFloat() * road.height();
-                float w = 58f + map.nextFloat() * 120f;
-                float h = 18f + map.nextFloat() * 46f;
-                scars.add(new Scar(x, y, w, h, map.nextFloat() * 180f, map.nextBoolean() ? 0x4a5b452b : 0x3f6b5538));
+                float w = 72f + map.nextFloat() * 180f;
+                float h = 22f + map.nextFloat() * 70f;
+                scars.add(new Scar(x, y, w, h, map.nextFloat() * 180f, map.nextBoolean() ? 0x56513c27 : 0x4a655139));
             }
         }
-        for (int i = 0; i < 24; i++) {
+        for (int i = 0; i < 58; i++) {
             float x = 260f + map.nextFloat() * (WORLD_W - 520f);
             float y = 260f + map.nextFloat() * (WORLD_H - 520f);
-            float w = 38f + map.nextFloat() * 92f;
-            float h = 26f + map.nextFloat() * 72f;
-            int color = map.nextInt(100) < 38 ? 0x3f5b472e : 0x365d5735;
+            float w = 48f + map.nextFloat() * 150f;
+            float h = 30f + map.nextFloat() * 94f;
+            int color = map.nextInt(100) < 38 ? 0x46543e25 : 0x3d4b5635;
             scars.add(new Scar(x, y, w, h, map.nextFloat() * 180f, color));
+        }
+    }
+
+    private void buildCracks() {
+        Random map = new Random(5150);
+        for (RectF road : roads) {
+            int count = Math.max(3, (int) ((road.width() + road.height()) / 1300f));
+            for (int i = 0; i < count; i++) {
+                boolean horizontal = road.width() >= road.height();
+                float x = road.left + 30f + map.nextFloat() * Math.max(1f, road.width() - 60f);
+                float y = road.top + 30f + map.nextFloat() * Math.max(1f, road.height() - 60f);
+                float length = 90f + map.nextFloat() * 170f;
+                float angle = horizontal ? map.nextFloat() * 24f - 12f : 90f + map.nextFloat() * 24f - 12f;
+                cracks.add(new Crack(x, y, length, angle, 0x96312620, 5f, true));
+            }
+        }
+        for (int i = 0; i < 46; i++) {
+            float x = 340f + map.nextFloat() * (WORLD_W - 680f);
+            float y = 340f + map.nextFloat() * (WORLD_H - 680f);
+            float length = 70f + map.nextFloat() * 150f;
+            float angle = map.nextFloat() * 180f;
+            cracks.add(new Crack(x, y, length, angle, 0x71302118, 3.5f, map.nextBoolean()));
         }
     }
 
@@ -1686,7 +1732,7 @@ class GameWorld {
         for (RectF road : roads) {
             boolean horizontal = road.width() >= road.height();
             float area = road.width() * road.height();
-            int count = Math.max(5, (int) (area / 52000f));
+            int count = Math.max(8, (int) (area / 36000f));
             for (int i = 0; i < count; i++) {
                 float x = road.left + 24f + map.nextFloat() * Math.max(1f, road.width() - 48f);
                 float y = road.top + 24f + map.nextFloat() * Math.max(1f, road.height() - 48f);
@@ -1859,10 +1905,25 @@ class GameWorld {
                 drawRect.set(x, y, Math.min(x + TERRAIN_TILE, WORLD_W), Math.min(y + TERRAIN_TILE, WORLD_H));
                 bitmapPaint.setAlpha(255);
                 canvas.drawBitmap(grassTexture, null, drawRect, bitmapPaint);
-                paint.setColor(0x24202a1c);
+                int shade = terrainTileShade(x, y);
+                paint.setColor(shade);
+                canvas.drawRect(drawRect, paint);
+                paint.setColor(0x20202a1c);
                 canvas.drawRect(drawRect, paint);
             }
         }
+    }
+
+    private int terrainTileShade(float x, float y) {
+        int hx = (int) (x / TERRAIN_TILE);
+        int hy = (int) (y / TERRAIN_TILE);
+        int hash = Math.abs(hx * 83492791 ^ hy * 297121507);
+        int alpha = 10 + hash % 28;
+        int tone = hash % 4;
+        if (tone == 0) return (alpha << 24) | 0x122011;
+        if (tone == 1) return (alpha << 24) | 0x3d3422;
+        if (tone == 2) return (alpha << 24) | 0x24351d;
+        return (alpha << 24) | 0x4a4b2f;
     }
 
     private void drawRoads(Canvas canvas, float camX, float camY, int width, int height) {
@@ -1916,6 +1977,42 @@ class GameWorld {
         }
     }
 
+    private void drawCracks(Canvas canvas, float camX, float camY, int width, int height) {
+        RectF visible = new RectF(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
+        paint.setStyle(Paint.Style.STROKE);
+        paint.setStrokeCap(Paint.Cap.ROUND);
+        for (Crack crack : cracks) {
+            float half = crack.length * 0.55f;
+            tempRect.set(crack.x - half, crack.y - half, crack.x + half, crack.y + half);
+            if (!RectF.intersects(visible, tempRect)) continue;
+            drawCrack(canvas, crack.x, crack.y, crack.length, crack.angle, crack.color, crack.stroke, crack.branch);
+        }
+        paint.setStrokeCap(Paint.Cap.BUTT);
+        paint.setStyle(Paint.Style.FILL);
+    }
+
+    private void drawCrack(Canvas canvas, float x, float y, float length, float angle, int color, float stroke, boolean branch) {
+        canvas.save();
+        canvas.rotate(angle, x, y);
+        paint.setColor(color);
+        paint.setStrokeWidth(stroke);
+        float left = x - length * 0.5f;
+        float p1 = x - length * 0.22f;
+        float p2 = x + length * 0.08f;
+        float p3 = x + length * 0.31f;
+        float right = x + length * 0.5f;
+        canvas.drawLine(left, y, p1, y - length * 0.07f, paint);
+        canvas.drawLine(p1, y - length * 0.07f, p2, y + length * 0.05f, paint);
+        canvas.drawLine(p2, y + length * 0.05f, p3, y - length * 0.04f, paint);
+        canvas.drawLine(p3, y - length * 0.04f, right, y + length * 0.02f, paint);
+        if (branch) {
+            paint.setStrokeWidth(Math.max(2f, stroke * 0.68f));
+            canvas.drawLine(p2, y + length * 0.05f, p2 + length * 0.16f, y + length * 0.20f, paint);
+            canvas.drawLine(p1, y - length * 0.07f, p1 - length * 0.14f, y - length * 0.18f, paint);
+        }
+        canvas.restore();
+    }
+
     private void drawRoadMarks(Canvas canvas, float camX, float camY, int width, int height) {
         RectF visible = new RectF(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
         for (RoadMark mark : roadMarks) {
@@ -1944,6 +2041,9 @@ class GameWorld {
                 canvas.drawLine(left, mark.y, q1, mark.y - mark.h * 0.35f, paint);
                 canvas.drawLine(q1, mark.y - mark.h * 0.35f, q2, mark.y + mark.h * 0.28f, paint);
                 canvas.drawLine(q2, mark.y + mark.h * 0.28f, right, mark.y - mark.h * 0.12f, paint);
+                paint.setStrokeWidth(3f);
+                canvas.drawLine(q1, mark.y - mark.h * 0.35f, q1 - mark.w * 0.16f, mark.y - mark.h * 0.68f, paint);
+                canvas.drawLine(q2, mark.y + mark.h * 0.28f, q2 + mark.w * 0.14f, mark.y + mark.h * 0.62f, paint);
                 paint.setStrokeCap(Paint.Cap.BUTT);
                 paint.setStyle(Paint.Style.FILL);
             } else {
@@ -2373,6 +2473,26 @@ class GameWorld {
             this.h = h;
             this.angle = angle;
             this.color = color;
+        }
+    }
+
+    private static class Crack {
+        final float x;
+        final float y;
+        final float length;
+        final float angle;
+        final int color;
+        final float stroke;
+        final boolean branch;
+
+        Crack(float x, float y, float length, float angle, int color, float stroke, boolean branch) {
+            this.x = x;
+            this.y = y;
+            this.length = length;
+            this.angle = angle;
+            this.color = color;
+            this.stroke = stroke;
+            this.branch = branch;
         }
     }
 
