@@ -68,6 +68,7 @@ class GameWorld {
     private static final int FUEL_CANISTERS = 12;
     private static final int SANDBAGS = 13;
     private static final int WATCHTOWER = 14;
+    private static final int TALL_GRASS = 15;
     private static final float TERRAIN_TILE = 220f;
     private static final float ROAD_TILE = 190f;
     private static final float TREE_FALL_SECONDS = 0.75f;
@@ -108,6 +109,7 @@ class GameWorld {
     private final Bitmap fuelCanistersTexture;
     private final Bitmap sandbagsTexture;
     private final Bitmap watchtowerTexture;
+    private final Bitmap tallGrassTexture;
     private final List<Obstacle> obstacles = new ArrayList<>();
     private final List<RectF> roads = new ArrayList<>();
     private final List<Scar> scars = new ArrayList<>();
@@ -173,6 +175,7 @@ class GameWorld {
         fuelCanistersTexture = loadTexture(context, "textures/fuel_canisters.png");
         sandbagsTexture = loadTexture(context, "textures/sandbags.png");
         watchtowerTexture = loadTexture(context, "textures/watchtower.png");
+        tallGrassTexture = loadTexture(context, "textures/tall_grass.png");
         buildMap();
         reset(true, 1);
     }
@@ -1460,15 +1463,16 @@ class GameWorld {
         Random map = new Random(421);
         buildDefensiveBarriers(map);
         buildForestClusters(map);
+        buildTallGrassPatches(map);
         buildBattleClutter(map);
         buildSupplyFields(map);
-        for (int i = 0; i < 48; i++) {
+        for (int i = 0; i < 38; i++) {
             int kind = pickProp(map);
             float x = 520f + map.nextFloat() * (WORLD_W - 1040f);
             float y = 520f + map.nextFloat() * (WORLD_H - 1040f);
             placePropCentered(kind, x, y, map, kind == BUSH ? 6f : 48f);
         }
-        for (int i = 0; i < 72; i++) {
+        for (int i = 0; i < 46; i++) {
             float x = 360f + map.nextFloat() * (WORLD_W - 720f);
             float y = 360f + map.nextFloat() * (WORLD_H - 720f);
             placePropCentered(CRATER, x, y, map, 0f);
@@ -1509,6 +1513,23 @@ class GameWorld {
         }
     }
 
+    private void buildTallGrassPatches(Random map) {
+        float[][] centers = {
+                {720f, 2450f}, {1480f, 3940f}, {2320f, 1240f}, {2780f, 5340f},
+                {4020f, 850f}, {4380f, 4560f}, {5480f, 1780f}, {5520f, 3880f}
+        };
+        for (float[] center : centers) {
+            int count = 7 + map.nextInt(6);
+            for (int i = 0; i < count; i++) {
+                float angle = map.nextFloat() * (float) Math.PI * 2f;
+                float radius = (float) Math.sqrt(map.nextFloat()) * (180f + map.nextInt(230));
+                float x = center[0] + (float) Math.cos(angle) * radius;
+                float y = center[1] + (float) Math.sin(angle) * radius;
+                placePropCentered(TALL_GRASS, x, y, map, 135f);
+            }
+        }
+    }
+
     private void buildDefensiveBarriers(Random map) {
         buildFenceBarrier(1500f, 760f, WORLD_H - 820f, map, 1f);
         buildFenceBarrier(WORLD_W - 1630f, 760f, WORLD_H - 820f, map, -1f);
@@ -1522,9 +1543,10 @@ class GameWorld {
             float wave = (float) Math.sin(y * 0.006f + side * 1.7f) * 52f;
             float jitter = map.nextInt(55) - 27f;
             float x = baseX + wave + jitter;
-            placePropRect(FENCE, x, y + map.nextInt(36) - 18f, x + 132f, y + 228f + map.nextInt(34), 24f);
+            placePropRect(FENCE, x, y + map.nextInt(30) - 15f, x + 112f, y + 198f + map.nextInt(22), 24f);
             if (map.nextInt(100) < 24) {
-                placePropRect(FENCE, x + side * (118f + map.nextInt(50)), y + 54f, x + side * (118f + map.nextInt(50)) + 132f, y + 246f, 24f);
+                float sideX = x + side * (104f + map.nextInt(42));
+                placePropRect(FENCE, sideX, y + 54f, sideX + 112f, y + 236f, 24f);
             }
         }
 
@@ -1603,9 +1625,9 @@ class GameWorld {
 
     private void placeFenceLine(float x, float y, int count, boolean horizontal) {
         for (int i = 0; i < count; i++) {
-            float l = x + (horizontal ? i * 286f : 0f);
-            float t = y + (horizontal ? 0f : i * 132f);
-            addFixedProp(FENCE, l, t, l + (horizontal ? 270f : 132f), t + (horizontal ? 126f : 270f));
+            float l = x + (horizontal ? i * 236f : 0f);
+            float t = y + (horizontal ? 0f : i * 116f);
+            addFixedProp(FENCE, l, t, l + (horizontal ? 220f : 108f), t + (horizontal ? 104f : 220f));
         }
     }
 
@@ -1686,7 +1708,7 @@ class GameWorld {
     private void buildScars() {
         Random map = new Random(9044);
         for (RectF road : roads) {
-            int count = Math.max(4, (int) ((road.width() + road.height()) / 1150f));
+            int count = Math.max(3, (int) ((road.width() + road.height()) / 1700f));
             for (int i = 0; i < count; i++) {
                 float x = road.left + map.nextFloat() * road.width();
                 float y = road.top + map.nextFloat() * road.height();
@@ -1695,7 +1717,7 @@ class GameWorld {
                 scars.add(new Scar(x, y, w, h, map.nextFloat() * 180f, map.nextBoolean() ? 0x56513c27 : 0x4a655139));
             }
         }
-        for (int i = 0; i < 58; i++) {
+        for (int i = 0; i < 36; i++) {
             float x = 260f + map.nextFloat() * (WORLD_W - 520f);
             float y = 260f + map.nextFloat() * (WORLD_H - 520f);
             float w = 48f + map.nextFloat() * 150f;
@@ -1708,7 +1730,7 @@ class GameWorld {
     private void buildCracks() {
         Random map = new Random(5150);
         for (RectF road : roads) {
-            int count = Math.max(3, (int) ((road.width() + road.height()) / 1300f));
+            int count = Math.max(2, (int) ((road.width() + road.height()) / 1900f));
             for (int i = 0; i < count; i++) {
                 boolean horizontal = road.width() >= road.height();
                 float x = road.left + 30f + map.nextFloat() * Math.max(1f, road.width() - 60f);
@@ -1718,7 +1740,7 @@ class GameWorld {
                 cracks.add(new Crack(x, y, length, angle, 0x96312620, 5f, true));
             }
         }
-        for (int i = 0; i < 46; i++) {
+        for (int i = 0; i < 28; i++) {
             float x = 340f + map.nextFloat() * (WORLD_W - 680f);
             float y = 340f + map.nextFloat() * (WORLD_H - 680f);
             float length = 70f + map.nextFloat() * 150f;
@@ -1732,7 +1754,7 @@ class GameWorld {
         for (RectF road : roads) {
             boolean horizontal = road.width() >= road.height();
             float area = road.width() * road.height();
-            int count = Math.max(8, (int) (area / 36000f));
+            int count = Math.max(5, (int) (area / 54000f));
             for (int i = 0; i < count; i++) {
                 float x = road.left + 24f + map.nextFloat() * Math.max(1f, road.width() - 48f);
                 float y = road.top + 24f + map.nextFloat() * Math.max(1f, road.height() - 48f);
@@ -1783,7 +1805,7 @@ class GameWorld {
     }
 
     private static boolean isSolidProp(int kind) {
-        return kind != BUSH && kind != TREE_1 && kind != TREE_2 && kind != CRATER;
+        return kind != BUSH && kind != TREE_1 && kind != TREE_2 && kind != CRATER && kind != TALL_GRASS;
     }
 
     private static boolean blocksShotsProp(int kind) {
@@ -1815,6 +1837,8 @@ class GameWorld {
                 return 950f;
             case CRATER:
                 return 260f;
+            case TALL_GRASS:
+                return 230f;
             default:
                 return 0f;
         }
@@ -1827,7 +1851,7 @@ class GameWorld {
             case BARREL:
                 return 88f + map.nextInt(28);
             case FENCE:
-                return 230f + map.nextInt(150);
+                return 178f + map.nextInt(56);
             case BUSH:
                 return 150f + map.nextInt(80);
             case LAKE:
@@ -1841,7 +1865,9 @@ class GameWorld {
             case CONCRETE_BARRIER:
                 return 220f + map.nextInt(70);
             case CRATER:
-                return 170f + map.nextInt(150);
+                return 118f + map.nextInt(54);
+            case TALL_GRASS:
+                return 138f + map.nextInt(46);
             case DESTROYED_TANK:
                 return 210f + map.nextInt(70);
             case FUEL_CANISTERS:
@@ -1862,7 +1888,7 @@ class GameWorld {
             case BARREL:
                 return 88f + map.nextInt(28);
             case FENCE:
-                return 105f + map.nextInt(45);
+                return 88f + map.nextInt(24);
             case BUSH:
                 return 140f + map.nextInt(70);
             case LAKE:
@@ -1876,7 +1902,9 @@ class GameWorld {
             case CONCRETE_BARRIER:
                 return 105f + map.nextInt(35);
             case CRATER:
-                return 130f + map.nextInt(115);
+                return 96f + map.nextInt(48);
+            case TALL_GRASS:
+                return 128f + map.nextInt(42);
             case DESTROYED_TANK:
                 return 150f + map.nextInt(55);
             case FUEL_CANISTERS:
@@ -1928,15 +1956,14 @@ class GameWorld {
 
     private void drawRoads(Canvas canvas, float camX, float camY, int width, int height) {
         if (roadTexture == null) return;
-        RectF visible = new RectF(camX - ROAD_TILE, camY - ROAD_TILE, camX + width + ROAD_TILE, camY + height + ROAD_TILE);
         for (RectF road : roads) {
-            if (!RectF.intersects(visible, road)) continue;
+            if (!RectF.intersects(visibleRect, road)) continue;
             float left = (float) Math.floor(road.left / ROAD_TILE) * ROAD_TILE;
             float top = (float) Math.floor(road.top / ROAD_TILE) * ROAD_TILE;
             for (float y = top; y < road.bottom; y += ROAD_TILE) {
                 for (float x = left; x < road.right; x += ROAD_TILE) {
                     drawRect.set(Math.max(x, road.left), Math.max(y, road.top), Math.min(x + ROAD_TILE, road.right), Math.min(y + ROAD_TILE, road.bottom));
-                    if (RectF.intersects(visible, drawRect)) {
+                    if (RectF.intersects(visibleRect, drawRect)) {
                         bitmapPaint.setAlpha(255);
                         canvas.drawBitmap(roadTexture, null, drawRect, bitmapPaint);
                         int shade = roadTileShade(x, y);
@@ -1964,11 +1991,10 @@ class GameWorld {
     }
 
     private void drawScars(Canvas canvas, float camX, float camY, int width, int height) {
-        RectF visible = new RectF(camX - 220f, camY - 220f, camX + width + 220f, camY + height + 220f);
         paint.setStyle(Paint.Style.FILL);
         for (Scar scar : scars) {
             tempRect.set(scar.x - scar.w * 0.5f, scar.y - scar.h * 0.5f, scar.x + scar.w * 0.5f, scar.y + scar.h * 0.5f);
-            if (!RectF.intersects(visible, tempRect)) continue;
+            if (!RectF.intersects(visibleRect, tempRect)) continue;
             paint.setColor(scar.color);
             canvas.save();
             canvas.rotate(scar.angle, scar.x, scar.y);
@@ -1978,13 +2004,12 @@ class GameWorld {
     }
 
     private void drawCracks(Canvas canvas, float camX, float camY, int width, int height) {
-        RectF visible = new RectF(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeCap(Paint.Cap.ROUND);
         for (Crack crack : cracks) {
             float half = crack.length * 0.55f;
             tempRect.set(crack.x - half, crack.y - half, crack.x + half, crack.y + half);
-            if (!RectF.intersects(visible, tempRect)) continue;
+            if (!RectF.intersects(visibleRect, tempRect)) continue;
             drawCrack(canvas, crack.x, crack.y, crack.length, crack.angle, crack.color, crack.stroke, crack.branch);
         }
         paint.setStrokeCap(Paint.Cap.BUTT);
@@ -2014,10 +2039,9 @@ class GameWorld {
     }
 
     private void drawRoadMarks(Canvas canvas, float camX, float camY, int width, int height) {
-        RectF visible = new RectF(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
         for (RoadMark mark : roadMarks) {
             tempRect.set(mark.x - mark.w * 0.5f, mark.y - mark.h * 0.5f, mark.x + mark.w * 0.5f, mark.y + mark.h * 0.5f);
-            if (!RectF.intersects(visible, tempRect)) continue;
+            if (!RectF.intersects(visibleRect, tempRect)) continue;
             canvas.save();
             canvas.rotate(mark.angle, mark.x, mark.y);
             paint.setColor(mark.color);
@@ -2298,7 +2322,7 @@ class GameWorld {
         }
         BitmapFactory.Options options = new BitmapFactory.Options();
         options.inSampleSize = sampleSize(bounds.outWidth, bounds.outHeight, maxSize);
-        if (path.contains("grass") || path.contains("road")) {
+        if ("textures/grass.png".equals(path) || "textures/road.png".equals(path)) {
             options.inPreferredConfig = Bitmap.Config.RGB_565;
         }
         try (InputStream input = context.getAssets().open(path)) {
@@ -2346,6 +2370,8 @@ class GameWorld {
                 return sandbagsTexture;
             case WATCHTOWER:
                 return watchtowerTexture;
+            case TALL_GRASS:
+                return tallGrassTexture;
             default:
                 return null;
         }
@@ -2447,7 +2473,28 @@ class GameWorld {
                     world.bitmapPaint.setAlpha(255);
                     return;
                 }
-                canvas.drawBitmap(texture, null, rect, world.bitmapPaint);
+                if (kind == FENCE) {
+                    boolean vertical = rect.height() > rect.width() * 1.22f;
+                    float drawW = vertical ? Math.min(rect.height(), 220f) : Math.min(rect.width(), 220f);
+                    float drawH = vertical ? Math.min(rect.width(), 108f) : Math.min(rect.height(), 108f);
+                    world.tempRect.set(rect.centerX() - drawW * 0.5f, rect.centerY() - drawH * 0.5f,
+                            rect.centerX() + drawW * 0.5f, rect.centerY() + drawH * 0.5f);
+                    if (vertical) {
+                        canvas.save();
+                        canvas.rotate(90f, rect.centerX(), rect.centerY());
+                        canvas.drawBitmap(texture, null, world.tempRect, world.bitmapPaint);
+                        canvas.restore();
+                    } else {
+                        canvas.drawBitmap(texture, null, world.tempRect, world.bitmapPaint);
+                    }
+                } else if (kind == CRATER) {
+                    float side = clamp((rect.width() + rect.height()) * 0.5f, 100f, 154f);
+                    world.tempRect.set(rect.centerX() - side * 0.5f, rect.centerY() - side * 0.5f,
+                            rect.centerX() + side * 0.5f, rect.centerY() + side * 0.5f);
+                    canvas.drawBitmap(texture, null, world.tempRect, world.bitmapPaint);
+                } else {
+                    canvas.drawBitmap(texture, null, rect, world.bitmapPaint);
+                }
                 return;
             }
             paint.setStyle(Paint.Style.FILL);
