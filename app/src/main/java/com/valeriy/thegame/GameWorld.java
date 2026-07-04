@@ -79,6 +79,7 @@ class GameWorld {
     private final Paint bitmapPaint = new Paint();
     private final RectF drawRect = new RectF();
     private final RectF tempRect = new RectF();
+    private final RectF cameraRect = new RectF();
     private final RectF visibleRect = new RectF();
     private final Bitmap grassTexture;
     private final Bitmap roadTexture;
@@ -302,7 +303,8 @@ class GameWorld {
         float cy = local == null ? WORLD_H * 0.5f : local.y;
         float camX = clamp(cx - width * 0.5f, 0f, Math.max(0f, WORLD_W - width));
         float camY = clamp(cy - height * 0.5f, 0f, Math.max(0f, WORLD_H - height));
-        visibleRect.set(camX - 260f, camY - 260f, camX + width + 260f, camY + height + 260f);
+        cameraRect.set(camX, camY, camX + width, camY + height);
+        visibleRect.set(camX - 96f, camY - 96f, camX + width + 96f, camY + height + 96f);
 
         canvas.drawColor(0xff16202a);
         canvas.save();
@@ -1515,17 +1517,17 @@ class GameWorld {
 
     private void buildTallGrassPatches(Random map) {
         float[][] centers = {
-                {720f, 2450f}, {1480f, 3940f}, {2320f, 1240f}, {2780f, 5340f},
+                {760f, 1460f}, {980f, 2160f}, {720f, 2450f}, {1480f, 3940f}, {2320f, 1240f}, {2780f, 5340f},
                 {4020f, 850f}, {4380f, 4560f}, {5480f, 1780f}, {5520f, 3880f}
         };
         for (float[] center : centers) {
-            int count = 7 + map.nextInt(6);
+            int count = 14 + map.nextInt(8);
             for (int i = 0; i < count; i++) {
                 float angle = map.nextFloat() * (float) Math.PI * 2f;
-                float radius = (float) Math.sqrt(map.nextFloat()) * (180f + map.nextInt(230));
+                float radius = (float) Math.sqrt(map.nextFloat()) * (220f + map.nextInt(310));
                 float x = center[0] + (float) Math.cos(angle) * radius;
                 float y = center[1] + (float) Math.sin(angle) * radius;
-                placePropCentered(TALL_GRASS, x, y, map, 135f);
+                placeTallGrass(x, y, map);
             }
         }
     }
@@ -1652,6 +1654,21 @@ class GameWorld {
         float w = propWidth(kind, map);
         float h = propHeight(kind, map);
         return placePropRect(kind, centerX - w * 0.5f, centerY - h * 0.5f, centerX + w * 0.5f, centerY + h * 0.5f, roadPadding);
+    }
+
+    private boolean placeTallGrass(float centerX, float centerY, Random map) {
+        float w = propWidth(TALL_GRASS, map);
+        float h = propHeight(TALL_GRASS, map);
+        RectF candidate = new RectF(centerX - w * 0.5f, centerY - h * 0.5f, centerX + w * 0.5f, centerY + h * 0.5f);
+        if (candidate.left < 140f || candidate.top < 140f || candidate.right > WORLD_W - 140f || candidate.bottom > WORLD_H - 140f) return false;
+        if (touchesRoad(candidate, 155f) || hitsBase(candidate.centerX(), candidate.centerY(), Math.max(w, h) * 0.34f)) return false;
+        RectF padded = new RectF(candidate.left - 18f, candidate.top - 18f, candidate.right + 18f, candidate.bottom + 18f);
+        for (Obstacle obstacle : obstacles) {
+            if (obstacle.gone || obstacle.kind == TALL_GRASS || obstacle.kind == BUSH || obstacle.kind == CRATER) continue;
+            if (RectF.intersects(padded, obstacle.hitRect)) return false;
+        }
+        obstacles.add(new Obstacle(TALL_GRASS, candidate.left, candidate.top, candidate.right, candidate.bottom, false, false));
+        return true;
     }
 
     private boolean placePropRect(int kind, float l, float t, float r, float b, float roadPadding) {
@@ -2450,7 +2467,7 @@ class GameWorld {
         }
 
         boolean foreground() {
-            return kind == BUSH || isTree();
+            return kind == BUSH || kind == TALL_GRASS || isTree();
         }
 
         boolean isTree() {
@@ -2498,10 +2515,18 @@ class GameWorld {
                 return;
             }
             paint.setStyle(Paint.Style.FILL);
-            paint.setColor(0xff4b5563);
-            canvas.drawRoundRect(rect, 8f, 8f, paint);
-            paint.setColor(0xff657184);
-            canvas.drawRect(rect.left + 8f, rect.top + 8f, rect.right - 8f, rect.top + 18f, paint);
+            if (kind == TALL_GRASS) {
+                paint.setColor(0xcc4ade3b);
+                canvas.drawOval(rect, paint);
+                paint.setColor(0x88348122);
+                canvas.drawOval(rect.left + rect.width() * 0.12f, rect.top + rect.height() * 0.18f,
+                        rect.right - rect.width() * 0.10f, rect.bottom - rect.height() * 0.10f, paint);
+            } else {
+                paint.setColor(0xff4b5563);
+                canvas.drawRoundRect(rect, 8f, 8f, paint);
+                paint.setColor(0xff657184);
+                canvas.drawRect(rect.left + 8f, rect.top + 8f, rect.right - 8f, rect.top + 18f, paint);
+            }
         }
     }
 
